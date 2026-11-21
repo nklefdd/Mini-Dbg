@@ -108,6 +108,108 @@ static bool finish_step(Debugger *debugger, bool thread_exited)
     return true;
 }
 
+static bool rewind_thread(Thread *thread, DWORD64 address)
+{
+    CONTEXT context;
+    if (!get_context(thread->handle, &context))
+        return false;
+    context.Rip = address;
+    if (!SetThreadContext(thread->handle, &context)) {
+        print_error("SetThreadContext");
+        return false;
+    }
+    return true;
+}
+
+static bool is_debugger_noise(DWORD code)
+{
+    // OutputDebugString (ANSI and wide) and the MSVC thread-name exception
+    return code == 0x40010006u || code == 0x4001000Au || code == 0x406D1388u;
+}
+
+static const char *access_name(ULONG_PTR access)
+{
+    switch (access) {
+    case 0: return "read";
+    case 1: return "write";
+    case 8: return "execute";
+    default: return "access";
+    }
+}
+
+static bool report_step(Debugger *debugger, const Thread *thread)
+{
+    CONTEXT context;
+    if (!get_context(thread->handle, &context))
+        return false;
+    printf("Step at 0x%016" PRIX64 " (one instruction from 0x%016" PRIX64 ", thread %lu).\n",
+           (uint64_t)context.Rip, debugger->step_from, thread->id);
+    BYTE next[8];
+    if (read_memory(debugger->process, context.Rip, next, sizeof(next))) {
+        fputs("  Next instruction bytes:", stdout);
+        for (size_t i = 0; i < sizeof(next); ++i)
+            printf(" %02X", next[i]);
+        putchar('\n');
+    }
+    ++debugger->user_steps;
+    return true;
+}
+
+static bool report_breakpoint(Debugger *debugger, const Thread *thread, DWORD64 address,
+                              bool *initial_breakpoint)
+{
+    int index = find_breakpoint(debugger, address);
+    if (index < 0 || !debugger->breakpoints[index].armed) {
+        printf("%s at 0x%016" PRIX64 " (thread %lu).\n",
+               *initial_breakpoint ? "Initial breakpoint" : "Program breakpoint",
+               (uint64_t)address, thread->id);
+        *initial_breakpoint = false;
+        return true;
+    }
+    if (!disarm_breakpoint(debugger, index, thread->handle))
+        return false;
+    printf("Hit breakpoint %d at 0x%016" PRIX64 " (thread %lu).\n",
+           index + 1, (uint64_t)address, thread->id);
+    ++debugger->breakpoint_hits;
+    ++debugger->breakpoints[index].hits;
+    printf("  Hit count: %" PRIu64 " | original instruction restored\n",
+           debugger->breakpoints[index].hits);
+    return true;
+}
+
+static void report_exception(const EXCEPTION_DEBUG_INFO *info, const Thread *thread)
+{
+    const EXCEPTION_RECORD *record = &info->ExceptionRecord;
+    DWORD code = record->ExceptionCode;
+    ui_color(UI_ERROR);
+    printf("Exception 0x%08lX at 0x%016" PRIX64 " (%s chance, thread %lu).\n",
+           code, (uint64_t)(uintptr_t)record->ExceptionAddress,
+           info->dwFirstChance ? "first" : "second", thread->id);
+    ui_color(UI_RESET);
+    if ((code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR) &&
+        record->NumberParameters >= 2)
+        printf("  Invalid %s at 0x%016" PRIX64 ".\n",
+               access_name(record->ExceptionInformation[0]),
+               (uint64_t)record->ExceptionInformation[1]);
+    puts(info->dwFirstChance ? "  continue passes this exception to the program's handlers."
+                            : "  No handler accepted this exception; continue allows termination.");
+}
+
+static bool run_stop_commands(Debugger *debugger, Thread *thread, bool can_step)
+{
+    ++debugger->stops;
+    Action action = command_loop(debugger, thread, can_step);
+    if (action == ACTION_QUIT) {
+        debugger->quit_requested = true;
+        return false;
+    }
+    if (action == ACTION_ERROR)
+        return false;
+    if (action == ACTION_STEP || debugger->pending_breakpoint >= 0)
+        return begin_step(debugger, thread, action == ACTION_STEP);
+    return true;
+}
+
 static bool handle_exception(Debugger *debugger, const DEBUG_EVENT *event,
                              bool *initial_breakpoint, DWORD *status)
 {
@@ -121,93 +223,35 @@ static bool handle_exception(Debugger *debugger, const DEBUG_EVENT *event,
     DWORD64 address = (DWORD64)(uintptr_t)info->ExceptionRecord.ExceptionAddress;
     bool own_step = debugger->stepping_thread == event->dwThreadId;
     bool visible_step = debugger->visible_step;
-    bool can_step = true;
 
-    if (debugger->stepping_thread && !own_step && code == EXCEPTION_BREAKPOINT && // retry queued INT3 after the pending step rearms the breakpoint
-        find_breakpoint(debugger, address) >= 0) {
-        CONTEXT context;
-        if (!get_context(thread->handle, &context))
-            return false;
-        context.Rip = address;
-        if (!SetThreadContext(thread->handle, &context)) {
-            print_error("SetThreadContext");
-            return false;
-        }
-        return true;
-    }
-    // OutputDebugString and thread-name exceptions are not crashes
-    if (code == 0x40010006u || code == 0x4001000Au || code == 0x406D1388u) {
+    // retry queued INT3 after the pending step rearms the breakpoint
+    if (debugger->stepping_thread && !own_step && code == EXCEPTION_BREAKPOINT &&
+        find_breakpoint(debugger, address) >= 0)
+        return rewind_thread(thread, address);
+    if (is_debugger_noise(code)) {
         *status = DBG_EXCEPTION_NOT_HANDLED;
         return true;
     }
-    if (debugger->stepping_thread && !own_step && !finish_step(debugger, false))
+    if (debugger->stepping_thread && !finish_step(debugger, false))
         return false;
-    if (own_step && !finish_step(debugger, false))
-        return false;
-    if (code == EXCEPTION_SINGLE_STEP && own_step && !visible_step) // hide the internal breakpoint recovery step
+    // hide the internal breakpoint recovery step
+    if (code == EXCEPTION_SINGLE_STEP && own_step && !visible_step)
         return true;
+
     ui_heading("PAUSED");
+    bool can_step = true;
     if (code == EXCEPTION_SINGLE_STEP && own_step) {
-        CONTEXT context;
-        if (!get_context(thread->handle, &context))
+        if (!report_step(debugger, thread))
             return false;
-        printf("Step at 0x%016" PRIX64 " (one instruction from 0x%016" PRIX64 ", thread %lu).\n",
-               (uint64_t)context.Rip, debugger->step_from, thread->id);
-        BYTE next[8];
-        if (read_memory(debugger->process, context.Rip, next, sizeof(next))) {
-            fputs("  Next instruction bytes:", stdout);
-            for (size_t i = 0; i < sizeof(next); ++i)
-                printf(" %02X", next[i]);
-            putchar('\n');
-        }
-        ++debugger->user_steps;
     } else if (code == EXCEPTION_BREAKPOINT) {
-        int index = find_breakpoint(debugger, address);
-        if (index >= 0 && debugger->breakpoints[index].armed) {
-            if (!disarm_breakpoint(debugger, index, thread->handle))
-                return false;
-            printf("Hit breakpoint %d at 0x%016" PRIX64 " (thread %lu).\n",
-                   index + 1, (uint64_t)address, thread->id);
-            ++debugger->breakpoint_hits;
-            ++debugger->breakpoints[index].hits;
-            printf("  Hit count: %" PRIu64 " | original instruction restored\n",
-                   debugger->breakpoints[index].hits);
-        } else {
-            printf("%s at 0x%016" PRIX64 " (thread %lu).\n",
-                   *initial_breakpoint ? "Initial breakpoint" : "Program breakpoint",
-                   (uint64_t)address, thread->id);
-            *initial_breakpoint = false;
-        }
+        if (!report_breakpoint(debugger, thread, address, initial_breakpoint))
+            return false;
     } else {
-        ui_color(UI_ERROR);
-        printf("Exception 0x%08lX at 0x%016" PRIX64 " (%s chance, thread %lu).\n",
-               code, (uint64_t)address,
-               info->dwFirstChance ? "first" : "second", thread->id);
-        ui_color(UI_RESET);
-        if ((code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR) &&
-            info->ExceptionRecord.NumberParameters >= 2) {
-            ULONG_PTR access = info->ExceptionRecord.ExceptionInformation[0];
-            printf("  Invalid %s at 0x%016" PRIX64 ".\n",
-                   access == 0 ? "read" : access == 1 ? "write" : access == 8 ? "execute" : "access",
-                   (uint64_t)info->ExceptionRecord.ExceptionInformation[1]);
-        }
-        puts(info->dwFirstChance ? "  continue passes this exception to the program's handlers."
-                                : "  No handler accepted this exception; continue allows termination.");
-        *status = DBG_EXCEPTION_NOT_HANDLED; // pass the exception to the target handlers
+        report_exception(info, thread);
+        *status = DBG_EXCEPTION_NOT_HANDLED;
         can_step = false;
     }
-
-    ++debugger->stops;
-    Action action = command_loop(debugger, thread, can_step);
-    if (action == ACTION_QUIT) {
-        debugger->quit_requested = true;
-        return false;
-    }
-    if (action == ACTION_ERROR)
-        return false;
-    if (action == ACTION_STEP || debugger->pending_breakpoint >= 0)
-        return begin_step(debugger, thread, action == ACTION_STEP);
-    return true;
+    return run_stop_commands(debugger, thread, can_step);
 }
 
 static bool print_image(Debugger *debugger, const CREATE_PROCESS_DEBUG_INFO *info)
@@ -230,6 +274,44 @@ static bool print_image(Debugger *debugger, const CREATE_PROCESS_DEBUG_INFO *inf
     return true;
 }
 
+static void close_file_handle(HANDLE file)
+{
+    if (file)
+        CloseHandle(file);
+}
+
+static bool handle_thread_exit(Debugger *debugger, DWORD thread_id, bool terminating)
+{
+    bool success = true;
+    Thread *thread = find_thread(debugger, thread_id);
+    if (!terminating && debugger->stepping_thread == thread_id)
+        success = finish_step(debugger, true);
+    if (thread) {
+        CloseHandle(thread->handle);
+        memset(thread, 0, sizeof(*thread));
+    }
+    return success;
+}
+
+static void forget_module_breakpoints(Debugger *debugger, DWORD64 module)
+{
+    for (int i = 0; i < MAX_BREAKPOINTS; ++i) {
+        Breakpoint *breakpoint = &debugger->breakpoints[i];
+        if (breakpoint->used && breakpoint->module == module) {
+            breakpoint->used = false;
+            if (debugger->pending_breakpoint == i)
+                debugger->pending_breakpoint = -1;
+        }
+    }
+}
+
+static void print_exit_code(DWORD exit_code)
+{
+    ui_color(exit_code ? UI_CHANGED : UI_SUCCESS);
+    printf("Process exited with code %lu (0x%08lX).\n", exit_code, exit_code);
+    ui_color(UI_RESET);
+}
+
 static int debug_loop(Debugger *debugger)
 {
     bool initial_breakpoint = true;
@@ -247,8 +329,7 @@ static int debug_loop(Debugger *debugger)
         bool exited = false;
         switch (event.dwDebugEventCode) {
         case CREATE_PROCESS_DEBUG_EVENT:
-            if (event.u.CreateProcessInfo.hFile)
-                CloseHandle(event.u.CreateProcessInfo.hFile);
+            close_file_handle(event.u.CreateProcessInfo.hFile);
             if (!terminating)
                 success = print_image(debugger, &event.u.CreateProcessInfo) &&
                           add_thread(debugger, event.dwThreadId, event.u.CreateProcessInfo.hThread);
@@ -257,30 +338,14 @@ static int debug_loop(Debugger *debugger)
             if (!terminating)
                 success = add_thread(debugger, event.dwThreadId, event.u.CreateThread.hThread);
             break;
-        case EXIT_THREAD_DEBUG_EVENT: {
-            Thread *thread = find_thread(debugger, event.dwThreadId);
-            if (!terminating && debugger->stepping_thread == event.dwThreadId)
-                success = finish_step(debugger, true);
-            if (thread) {
-                CloseHandle(thread->handle);
-                memset(thread, 0, sizeof(*thread));
-            }
+        case EXIT_THREAD_DEBUG_EVENT:
+            success = handle_thread_exit(debugger, event.dwThreadId, terminating);
             break;
-        }
         case LOAD_DLL_DEBUG_EVENT:
-            if (event.u.LoadDll.hFile)
-                CloseHandle(event.u.LoadDll.hFile);
+            close_file_handle(event.u.LoadDll.hFile);
             break;
         case UNLOAD_DLL_DEBUG_EVENT:
-            for (int i = 0; i < MAX_BREAKPOINTS; ++i) {
-                Breakpoint *breakpoint = &debugger->breakpoints[i];
-                if (breakpoint->used && breakpoint->module ==
-                    (DWORD64)(uintptr_t)event.u.UnloadDll.lpBaseOfDll) {
-                    breakpoint->used = false;
-                    if (debugger->pending_breakpoint == i)
-                        debugger->pending_breakpoint = -1;
-                }
-            }
+            forget_module_breakpoints(debugger, (DWORD64)(uintptr_t)event.u.UnloadDll.lpBaseOfDll);
             break;
         case EXCEPTION_DEBUG_EVENT:
             if (!terminating)
@@ -290,10 +355,7 @@ static int debug_loop(Debugger *debugger)
             break;
         case EXIT_PROCESS_DEBUG_EVENT:
             print_summary(debugger);
-            ui_color(event.u.ExitProcess.dwExitCode ? UI_CHANGED : UI_SUCCESS);
-            printf("Process exited with code %lu (0x%08lX).\n",
-                   event.u.ExitProcess.dwExitCode, event.u.ExitProcess.dwExitCode);
-            ui_color(UI_RESET);
+            print_exit_code(event.u.ExitProcess.dwExitCode);
             exited = true;
             break;
         default:
