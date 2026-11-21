@@ -6,6 +6,9 @@
 #include <wchar.h>
 #include <wctype.h>
 
+// generous upper bound: up to 4 UTF-8 bytes per wide character
+#define UTF8_INPUT_CAPACITY (4u * TARGET_PATH_CAPACITY)
+
 static int read_target_line(wchar_t *line)
 {
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
@@ -35,7 +38,7 @@ static int read_target_line(wchar_t *line)
         }
         line[length] = L'\0';
     } else {
-        size_t capacity = 4u * TARGET_PATH_CAPACITY; // keep redirected input and debugger commands in the same stream
+        size_t capacity = UTF8_INPUT_CAPACITY; // keep redirected input and debugger commands in the same stream
         char *utf8 = malloc(capacity);
         if (!utf8) {
             fputs("Cannot allocate program input.\n", stderr);
