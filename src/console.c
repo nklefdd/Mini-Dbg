@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define RULE_WIDTH 103
+
 static HANDLE output_handle;
 static DWORD original_mode;
 static bool mode_changed;
@@ -56,7 +58,7 @@ void ui_heading(const char *title)
 static void print_rule(void)
 {
     fputs("  ", stdout);
-    for (int i = 0; i < 103; ++i)
+    for (int i = 0; i < RULE_WIDTH; ++i)
         putchar('-');
     putchar('\n');
 }
