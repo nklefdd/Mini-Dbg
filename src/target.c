@@ -38,7 +38,8 @@ static int read_target_line(wchar_t *line)
         }
         line[length] = L'\0';
     } else {
-        size_t capacity = UTF8_INPUT_CAPACITY; // keep redirected input and debugger commands in the same stream
+        // keep redirected input and debugger commands in the same stream
+        size_t capacity = UTF8_INPUT_CAPACITY;
         char *utf8 = malloc(capacity);
         if (!utf8) {
             fputs("Cannot allocate program input.\n", stderr);
@@ -127,7 +128,8 @@ static bool resolve_target(const wchar_t *name, wchar_t *path)
     bool explicit_path = wcspbrk(name, L"\\/:") != NULL;
     if (search_directory(L".", name, path))
         return true;
-    if (explicit_path) // do not substitute another file for an explicit path
+    // do not substitute another file for an explicit path
+    if (explicit_path)
         return false;
     wchar_t directory[TARGET_PATH_CAPACITY];
     DWORD count = GetModuleFileNameW(NULL, directory, TARGET_PATH_CAPACITY);
@@ -139,7 +141,8 @@ static bool resolve_target(const wchar_t *name, wchar_t *path)
                 return true;
         }
     }
-    count = GetEnvironmentVariableW(L"PATH", directory, TARGET_PATH_CAPACITY); // search PATH after the local directories
+    // search PATH after the local directories
+    count = GetEnvironmentVariableW(L"PATH", directory, TARGET_PATH_CAPACITY);
     return count && count < TARGET_PATH_CAPACITY && search_directory(directory, name, path);
 }
 

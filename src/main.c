@@ -46,14 +46,16 @@ static bool begin_step(Debugger *debugger, Thread *current, bool visible)
     CONTEXT context;
     if (!get_context(current->handle, &context))
         return false;
-    for (int i = 0; i < MAX_THREADS; ++i) { // keep other threads paused while INT3 is disarmed
+    // keep other threads paused while INT3 is disarmed
+    for (int i = 0; i < MAX_THREADS; ++i) {
         Thread *thread = &debugger->threads[i];
         if (thread->handle && thread->id != current->id && !thread->suspended) {
             if (WaitForSingleObject(thread->handle, 0) == WAIT_OBJECT_0)
                 continue;
             if (SuspendThread(thread->handle) == (DWORD)-1) {
                 DWORD error = GetLastError();
-                if (error == ERROR_ACCESS_DENIED || // the thread may exit before its debug event arrives
+                // the thread may exit before its debug event arrives
+                if (error == ERROR_ACCESS_DENIED ||
                     WaitForSingleObject(thread->handle, 0) == WAIT_OBJECT_0)
                     continue;
                 SetLastError(error);
@@ -441,7 +443,8 @@ int wmain(int argc, wchar_t **argv)
         fputs("Cannot allocate program path.\n", stderr);
         return 1;
     }
-    bool interactive = argc == 1; // return to program selection after an interactive session
+    // return to program selection after an interactive session
+    bool interactive = argc == 1;
     int result = 0;
     for (;;) {
         TargetResult selection = select_target(interactive ? NULL : argv[1], target);

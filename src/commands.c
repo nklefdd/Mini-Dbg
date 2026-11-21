@@ -21,7 +21,8 @@ static bool parse_number(const char *text, int base, uint64_t *value)
     return true;
 }
 
-static bool alias_value(const Debugger *debugger, const Thread *thread, // resolve aliases using the current process state
+// resolve aliases using the current process state
+static bool alias_value(const Debugger *debugger, const Thread *thread,
                         const char *name, size_t length, uint64_t *value)
 {
     if (length == 5 && !strncmp(name, "entry", 5)) {
@@ -35,7 +36,8 @@ static bool alias_value(const Debugger *debugger, const Thread *thread, // resol
             return false;
         memcpy(number, name + 5, length - 5);
         number[length - 5] = '\0';
-        if (!parse_number(number, 16, &offset) || // reject offsets that would wrap around the address space
+        // reject offsets that would wrap around the address space
+        if (!parse_number(number, 16, &offset) ||
             offset > UINT64_MAX - debugger->image_base)
             return false;
         *value = debugger->image_base + offset;
@@ -66,7 +68,8 @@ static bool alias_value(const Debugger *debugger, const Thread *thread, // resol
     return false;
 }
 
-static const char *resolve_alias(const Debugger *debugger, const Thread *thread, // reuse the numeric parser after resolving aliases
+// reuse the numeric parser after resolving aliases
+static const char *resolve_alias(const Debugger *debugger, const Thread *thread,
                                  const char *line, char *out, size_t size)
 {
     const char *p = line + strspn(line, " \t");
@@ -168,7 +171,8 @@ Action command_loop(Debugger *debugger, Thread *thread, bool can_step)
             }
             return ACTION_QUIT;
         }
-        if (!strchr(line, '\n') && !feof(stdin)) { // discard the remainder so it cannot become another command
+        // discard the remainder so it cannot become another command
+        if (!strchr(line, '\n') && !feof(stdin)) {
             int character;
             while ((character = getchar()) != '\n' && character != EOF) {}
             puts("Command is too long.");

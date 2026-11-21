@@ -43,7 +43,8 @@ bool write_byte(HANDLE process, DWORD64 address, BYTE value)
         print_error("Write breakpoint byte");
         return false;
     }
-    if (!VirtualProtectEx(process, location, 1, PAGE_EXECUTE_READWRITE, // temporarily allow writes to the code page
+    // temporarily allow writes to the code page
+    if (!VirtualProtectEx(process, location, 1, PAGE_EXECUTE_READWRITE,
                           &old_protection)) {
         print_error("VirtualProtectEx");
         return false;
@@ -56,7 +57,8 @@ bool write_byte(HANDLE process, DWORD64 address, BYTE value)
         print_error("Restore memory protection");
         success = false;
     }
-    if (!FlushInstructionCache(process, location, 1)) { // flush cached instructions after modifying code
+    // flush cached instructions after modifying code
+    if (!FlushInstructionCache(process, location, 1)) {
         print_error("FlushInstructionCache");
         success = false;
     }
@@ -146,12 +148,14 @@ bool disarm_breakpoint(Debugger *debugger, int index, HANDLE thread)
         !write_byte(debugger->process, breakpoint->address, breakpoint->original))
         return false;
     breakpoint->armed = false;
-    context.Rip = breakpoint->address; // rewind RIP to execute the restored instruction
+    // rewind RIP to execute the restored instruction
+    context.Rip = breakpoint->address;
     if (!SetThreadContext(thread, &context)) {
         print_error("SetThreadContext");
         return false;
     }
-    debugger->pending_breakpoint = index; // rearm this breakpoint after the next instruction
+    // rearm this breakpoint after the next instruction
+    debugger->pending_breakpoint = index;
     return true;
 }
 

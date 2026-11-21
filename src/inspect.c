@@ -94,7 +94,8 @@ static SIZE_T read_visible_memory(HANDLE process, DWORD64 address, SIZE_T length
         SIZE_T chunk = available < length - offset ? available : length - offset;
         if (!chunk)
             break;
-        if (region.State == MEM_COMMIT && !(region.Protect & (PAGE_NOACCESS | PAGE_GUARD))) { // skip guard pages to preserve their state
+        // skip guard pages to preserve their state
+        if (region.State == MEM_COMMIT && !(region.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
             SIZE_T count = 0;
             ReadProcessMemory(process, (LPCVOID)(uintptr_t)current, bytes + offset, chunk, &count);
             if (count > chunk)
