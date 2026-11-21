@@ -29,6 +29,8 @@ static bool add_thread(Debugger *debugger, DWORD id, HANDLE source)
         if (debugger->stepping_thread && id != debugger->stepping_thread) {
             if (SuspendThread(thread->handle) == (DWORD)-1) {
                 print_error("SuspendThread");
+                CloseHandle(thread->handle);
+                thread->handle = NULL;
                 return false;
             }
             thread->suspended = true;
@@ -131,6 +133,11 @@ static bool handle_exception(Debugger *debugger, const DEBUG_EVENT *event,
             print_error("SetThreadContext");
             return false;
         }
+        return true;
+    }
+    // OutputDebugString and thread-name exceptions are not crashes
+    if (code == 0x40010006u || code == 0x4001000Au || code == 0x406D1388u) {
+        *status = DBG_EXCEPTION_NOT_HANDLED;
         return true;
     }
     if (debugger->stepping_thread && !own_step && !finish_step(debugger, false))
@@ -345,6 +352,14 @@ static int run_session(const wchar_t *target)
     return result;
 }
 
+static BOOL WINAPI on_console_signal(DWORD type)
+{
+    // atexit handlers do not run when the default handler ends the process
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT)
+        console_restore();
+    return FALSE;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
     if (argc > 2) {
@@ -353,6 +368,7 @@ int wmain(int argc, wchar_t **argv)
     }
     setvbuf(stdout, NULL, _IONBF, 0);
     console_init();
+    SetConsoleCtrlHandler(on_console_signal, TRUE);
     if (atexit(console_restore) != 0) {
         console_restore();
         return 1;
