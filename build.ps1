@@ -17,6 +17,8 @@ try {
         if ($Test) {
             & gcc @flags tests/test_memory.c @common -o bin/test_memory.exe
             if ($LASTEXITCODE -ne 0) { throw 'Memory unit test build failed.' }
+            & gcc @flags tests/test_breakpoints.c @common -o bin/test_breakpoints.exe
+            if ($LASTEXITCODE -ne 0) { throw 'Breakpoint unit test build failed.' }
             & gcc @flags tests/target.c -o bin/test_target.exe
             if ($LASTEXITCODE -ne 0) { throw 'Test target build failed.' }
         }
@@ -31,6 +33,8 @@ try {
         if ($Test) {
             & cl @flags tests/test_memory.c @common /Febin/test_memory.exe
             if ($LASTEXITCODE -ne 0) { throw 'Memory unit test build failed.' }
+            & cl @flags tests/test_breakpoints.c @common /Febin/test_breakpoints.exe
+            if ($LASTEXITCODE -ne 0) { throw 'Breakpoint unit test build failed.' }
             & cl @flags tests/target.c /Febin/test_target.exe
             if ($LASTEXITCODE -ne 0) { throw 'Test target build failed.' }
         }
@@ -42,6 +46,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed.' }
         & ./bin/test_memory.exe
         if ($LASTEXITCODE -ne 0) { throw 'Memory unit tests failed.' }
+        & ./bin/test_breakpoints.exe
+        if ($LASTEXITCODE -ne 0) { throw 'Breakpoint unit tests failed.' }
         & $Python tests/integration.py
         if ($LASTEXITCODE -ne 0) { throw 'Integration tests failed.' }
         & $Python tests/launcher.py
