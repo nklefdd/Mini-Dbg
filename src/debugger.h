@@ -16,6 +16,8 @@
 #define TRAP_FLAG 0x100u
 #define REGISTER_COUNT 18
 #define TARGET_PATH_CAPACITY 32768
+// CreateProcessW command line limit minus quotes and margin
+#define MAX_TARGET_PATH 32763
 
 typedef struct {
     DWORD64 address;
