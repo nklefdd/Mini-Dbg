@@ -14,6 +14,7 @@
 #define MAX_THREADS 64
 #define MAX_MEMORY 256
 #define TRAP_FLAG 0x100u
+#define INT3_OPCODE 0xCC
 #define REGISTER_COUNT 18
 #define TARGET_PATH_CAPACITY 32768
 // CreateProcessW command line limit minus quotes and margin

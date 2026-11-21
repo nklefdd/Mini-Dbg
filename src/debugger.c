@@ -117,13 +117,13 @@ bool add_breakpoint(Debugger *debugger, DWORD64 address)
         print_error("ReadProcessMemory");
         return true;
     }
-    if (original == 0xCC) {
+    if (original == INT3_OPCODE) {
         puts("This address already contains INT3.");
         return true;
     }
-    if (!write_byte(debugger->process, address, 0xCC)) {
+    if (!write_byte(debugger->process, address, INT3_OPCODE)) {
         BYTE check = 0;
-        if (read_memory(debugger->process, address, &check, 1) && check == 0xCC)
+        if (read_memory(debugger->process, address, &check, 1) && check == INT3_OPCODE)
             // roll back a half-applied write
             write_byte(debugger->process, address, original);
         puts("Breakpoint was not set.");
@@ -160,7 +160,7 @@ bool rearm_breakpoint(Debugger *debugger)
     if (debugger->pending_breakpoint < 0)
         return true;
     Breakpoint *breakpoint = &debugger->breakpoints[debugger->pending_breakpoint];
-    if (!write_byte(debugger->process, breakpoint->address, 0xCC))
+    if (!write_byte(debugger->process, breakpoint->address, INT3_OPCODE))
         return false;
     breakpoint->armed = true;
     debugger->pending_breakpoint = -1;
