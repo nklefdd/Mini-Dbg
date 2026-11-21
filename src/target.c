@@ -205,7 +205,7 @@ TargetResult select_target(const wchar_t *argument, wchar_t *path)
                 puts("Select a compiled Windows x64 executable, not a document or source file.");
             } else if (binary_type != SCS_64BIT_BINARY) {
                 puts("Only native Windows x64 executables are supported.");
-            } else if (wcslen(path) > 32763) {
+            } else if (wcslen(path) > MAX_TARGET_PATH) {
                 puts("Program name is too long.");
             } else {
                 print_target(path);
