@@ -4,6 +4,32 @@
 #include <stdio.h>
 #include <string.h>
 
+#define GENERAL_REGISTER_COUNT (REGISTER_COUNT - 1)
+#define EFLAGS_INDEX GENERAL_REGISTER_COUNT
+
+typedef struct {
+    const char *name;
+    bool is_address;
+} RegisterInfo;
+
+typedef struct {
+    const char *name;
+    unsigned bit;
+} FlagInfo;
+
+static const RegisterInfo REGISTERS[GENERAL_REGISTER_COUNT] = {
+    {"RAX", false}, {"RBX", false}, {"RCX", false}, {"RDX", false},
+    {"RSI", false}, {"RDI", false}, {"RBP", false}, {"RSP", true},
+    {"R8 ", false}, {"R9 ", false}, {"R10", false}, {"R11", false},
+    {"R12", false}, {"R13", false}, {"R14", false}, {"R15", false},
+    {"RIP", true}
+};
+
+static const FlagInfo FLAGS[] = {
+    {"CF", 0}, {"PF", 2}, {"AF", 4}, {"ZF", 6}, {"SF", 7},
+    {"TF", 8}, {"IF", 9}, {"DF", 10}, {"OF", 11}
+};
+
 static void print_register(const char *name, uint64_t value, bool changed, bool address)
 {
     ui_color(UI_MUTED);
@@ -13,37 +39,43 @@ static void print_register(const char *name, uint64_t value, bool changed, bool 
     ui_color(UI_RESET);
 }
 
+static void print_flag_bits(DWORD eflags)
+{
+    ui_color(UI_MUTED);
+    for (size_t i = 0; i < sizeof(FLAGS) / sizeof(FLAGS[0]); ++i)
+        printf("  %s=%u", FLAGS[i].name, (unsigned)((eflags >> FLAGS[i].bit) & 1));
+    putchar('\n');
+    ui_color(UI_RESET);
+}
+
 void print_registers(Thread *thread)
 {
-    CONTEXT c;
-    if (!get_context(thread->handle, &c))
+    CONTEXT context;
+    if (!get_context(thread->handle, &context))
         return;
-    const char *names[] = {"RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RBP", "RSP",
-                           "R8 ", "R9 ", "R10", "R11", "R12", "R13", "R14", "R15", "RIP"};
-    uint64_t values[REGISTER_COUNT] = {c.Rax, c.Rbx, c.Rcx, c.Rdx, c.Rsi, c.Rdi, c.Rbp, c.Rsp,
-                                      c.R8, c.R9, c.R10, c.R11, c.R12, c.R13, c.R14, c.R15,
-                                      c.Rip, c.EFlags};
+    uint64_t values[REGISTER_COUNT] = {
+        context.Rax, context.Rbx, context.Rcx, context.Rdx,
+        context.Rsi, context.Rdi, context.Rbp, context.Rsp,
+        context.R8, context.R9, context.R10, context.R11,
+        context.R12, context.R13, context.R14, context.R15,
+        context.Rip, context.EFlags
+    };
     ui_heading("REGISTERS");
     printf("  Thread %lu | %s\n\n", thread->id,
            thread->registers_seen ? "* changed since previous regs in this thread" : "first snapshot");
-    for (size_t i = 0; i < 17; ++i) {
+    for (size_t i = 0; i < GENERAL_REGISTER_COUNT; ++i) {
         bool changed = thread->registers_seen && values[i] != thread->previous_registers[i];
-        print_register(names[i], values[i], changed, i == 7 || i == 16);
-        if (i % 2 == 1 || i == 16)
+        print_register(REGISTERS[i].name, values[i], changed, REGISTERS[i].is_address);
+        if (i % 2 == 1 || i == GENERAL_REGISTER_COUNT - 1)
             putchar('\n');
     }
-    bool flags_changed = thread->registers_seen && values[17] != thread->previous_registers[17];
+    bool flags_changed = thread->registers_seen &&
+                         values[EFLAGS_INDEX] != thread->previous_registers[EFLAGS_INDEX];
     ui_color(flags_changed ? UI_CHANGED : UI_RESET);
-    printf("  EFLAGS=0x%08lX %c\n", c.EFlags, flags_changed ? '*' : ' ');
-    ui_color(UI_MUTED);
-    printf("  CF=%u  PF=%u  AF=%u  ZF=%u  SF=%u  TF=%u  IF=%u  DF=%u  OF=%u\n",
-           (unsigned)((c.EFlags >> 0) & 1), (unsigned)((c.EFlags >> 2) & 1),
-           (unsigned)((c.EFlags >> 4) & 1), (unsigned)((c.EFlags >> 6) & 1),
-           (unsigned)((c.EFlags >> 7) & 1), (unsigned)((c.EFlags >> 8) & 1),
-           (unsigned)((c.EFlags >> 9) & 1), (unsigned)((c.EFlags >> 10) & 1),
-           (unsigned)((c.EFlags >> 11) & 1));
-    ui_color(UI_RESET);
-    memcpy(thread->previous_registers, values, sizeof(values)); // compare snapshots within the same thread
+    printf("  EFLAGS=0x%08lX %c\n", context.EFlags, flags_changed ? '*' : ' ');
+    print_flag_bits(context.EFlags);
+    // compare snapshots within the same thread
+    memcpy(thread->previous_registers, values, sizeof(values));
     thread->registers_seen = true;
     putchar('\n');
 }
