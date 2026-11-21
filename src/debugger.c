@@ -121,8 +121,14 @@ bool add_breakpoint(Debugger *debugger, DWORD64 address)
         puts("This address already contains INT3.");
         return true;
     }
-    if (!write_byte(debugger->process, address, 0xCC))
-        return false;
+    if (!write_byte(debugger->process, address, 0xCC)) {
+        BYTE check = 0;
+        if (read_memory(debugger->process, address, &check, 1) && check == 0xCC)
+            // roll back a half-applied write
+            write_byte(debugger->process, address, original);
+        puts("Breakpoint was not set.");
+        return true;
+    }
     debugger->breakpoints[slot] = (Breakpoint){
         address, (DWORD64)(uintptr_t)region.AllocationBase, original, true, true, 0
     };
